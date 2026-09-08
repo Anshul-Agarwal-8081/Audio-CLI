@@ -21,10 +21,16 @@ const mp3Files = files.filter((file) =>
 // Application state
 // -------------------------
 
+// Currently selected song in the UI
 let selectedIndex = 0;
 
+// Index of the song that is actually playing
+let currentSongIndex = null;
+
+// Currently playing song
 let currentSong = null;
 
+// Reference to the currently running afplay process
 let player = null;
 
 let playbackState = null;
@@ -32,9 +38,10 @@ let playbackState = null;
 // "paused"
 // null
 
+// Total duration of current song
 let currentDuration = null;
 
-// Current position of song in seconds
+// Current position of current song
 let currentPosition = 0;
 
 // Timer used for updating progress
@@ -115,14 +122,14 @@ function startProgressTimer() {
 
     progressTimer = setInterval(() => {
 
-        // Only update while actually playing
+        // Only update while playing
         if (playbackState !== "playing") {
             return;
         }
 
         currentPosition++;
 
-        // Don't go beyond the song duration
+        // Don't go beyond duration
         if (
             currentDuration !== null &&
             currentPosition >= currentDuration
@@ -160,7 +167,7 @@ function displayUI() {
     // Move cursor to top-left
     process.stdout.write("\x1b[H");
 
-    // Clear everything below the cursor
+    // Clear everything below cursor
     process.stdout.write("\x1b[J");
 
     console.log("🎵 AUDIO CLI");
@@ -209,6 +216,7 @@ function displayUI() {
     }
 
     console.log("\n↑ ↓  Navigate");
+    console.log("← →  Previous / Next");
     console.log("Enter  Play");
     console.log("Space  Pause / Resume");
     console.log("Q  Quit");
@@ -221,18 +229,26 @@ function displayUI() {
 
 function stopCurrentSong() {
 
-    // IMPORTANT:
-    // Stop the progress timer
+    // Stop progress timer
     clearProgressTimer();
 
     if (player) {
 
-        player.kill();
+        // IMPORTANT:
+        // Remove reference BEFORE killing process.
+        //
+        // This makes sure the old player's
+        // "close" event does not trigger auto-next.
+        const oldPlayer = player;
 
         player = null;
+
+        oldPlayer.kill();
     }
 
     currentSong = null;
+
+    currentSongIndex = null;
 
     playbackState = null;
 
@@ -243,12 +259,17 @@ function stopCurrentSong() {
 
 
 // -------------------------
-// Play selected song
+// Play song at specific index
 // -------------------------
 
-async function playSelectedSong() {
+async function playSongAtIndex(index) {
 
-    const song = mp3Files[selectedIndex];
+    // Check index boundaries
+    if (index < 0 || index >= mp3Files.length) {
+        return;
+    }
+
+    const song = mp3Files[index];
 
     const songPath = path.join(songsFolder, song);
 
@@ -267,13 +288,16 @@ async function playSelectedSong() {
         player = newPlayer;
 
         // Update state
+        selectedIndex = index;
+
+        currentSongIndex = index;
+
         currentSong = song;
 
         playbackState = "playing";
 
         currentDuration = duration;
 
-        // Start from beginning
         currentPosition = 0;
 
         // Draw UI
@@ -292,7 +316,6 @@ async function playSelectedSong() {
             // Make sure this is still the active player
             if (player === newPlayer) {
 
-                // Stop progress timer
                 clearProgressTimer();
 
                 player = null;
@@ -305,7 +328,26 @@ async function playSelectedSong() {
 
                 currentPosition = 0;
 
-                displayUI();
+
+                // -------------------------
+                // Automatically play next
+                // -------------------------
+
+                const nextIndex = currentSongIndex + 1;
+
+                if (nextIndex < mp3Files.length) {
+
+                    playSongAtIndex(nextIndex);
+
+                }
+
+                else {
+
+                    // We are already at the last song
+                    currentSongIndex = null;
+
+                    displayUI();
+                }
             }
         });
 
@@ -318,12 +360,13 @@ async function playSelectedSong() {
 
             if (player === newPlayer) {
 
-                // Stop progress timer
                 clearProgressTimer();
 
                 player = null;
 
                 currentSong = null;
+
+                currentSongIndex = null;
 
                 playbackState = null;
 
@@ -334,7 +377,9 @@ async function playSelectedSong() {
 
             displayUI();
 
-            console.log(`Error playing song: ${error.message}`);
+            console.log(
+                `Error playing song: ${error.message}`
+            );
         });
 
     }
@@ -347,6 +392,86 @@ async function playSelectedSong() {
 
         console.log(error.message);
     }
+}
+
+
+// -------------------------
+// Play selected song
+// -------------------------
+
+function playSelectedSong() {
+
+    playSongAtIndex(selectedIndex);
+}
+
+
+// -------------------------
+// Next song
+// -------------------------
+
+function playNextSong() {
+
+    // If a song is currently playing,
+    // move relative to the CURRENTLY PLAYING song.
+    if (currentSongIndex !== null) {
+
+        const nextIndex = currentSongIndex + 1;
+
+        // Already at last song
+        if (nextIndex >= mp3Files.length) {
+            return;
+        }
+
+        playSongAtIndex(nextIndex);
+
+        return;
+    }
+
+
+    // Nothing playing:
+    // move relative to selected song
+    const nextIndex = selectedIndex + 1;
+
+    if (nextIndex >= mp3Files.length) {
+        return;
+    }
+
+    playSongAtIndex(nextIndex);
+}
+
+
+// -------------------------
+// Previous song
+// -------------------------
+
+function playPreviousSong() {
+
+    // If a song is currently playing,
+    // move relative to the CURRENTLY PLAYING song.
+    if (currentSongIndex !== null) {
+
+        const previousIndex = currentSongIndex - 1;
+
+        // Already at first song
+        if (previousIndex < 0) {
+            return;
+        }
+
+        playSongAtIndex(previousIndex);
+
+        return;
+    }
+
+
+    // Nothing playing:
+    // move relative to selected song
+    const previousIndex = selectedIndex - 1;
+
+    if (previousIndex < 0) {
+        return;
+    }
+
+    playSongAtIndex(previousIndex);
 }
 
 
@@ -431,6 +556,26 @@ function handleInput(key) {
         }
 
         displayUI();
+    }
+
+
+    // -------------------------
+    // Right Arrow → Next
+    // -------------------------
+
+    else if (key === "\u001b[C") {
+
+        playNextSong();
+    }
+
+
+    // -------------------------
+    // Left Arrow → Previous
+    // -------------------------
+
+    else if (key === "\u001b[D") {
+
+        playPreviousSong();
     }
 
 
