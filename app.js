@@ -17,6 +17,10 @@ let currentSong = null;
 // Reference to the currently running afplay process
 let player = null;
 
+// Current playback state
+// Possible values: "playing", "paused", null
+let playbackState = null;
+
 
 // -------------------------
 // Draw UI
@@ -37,13 +41,18 @@ function displayUI() {
     console.log("\n────────────");
 
     if (currentSong) {
-        console.log(`▶ Playing: ${currentSong}`);
+        if (playbackState === "playing") {
+            console.log(`▶ Playing: ${currentSong}`);
+        } else if (playbackState === "paused") {
+            console.log(`⏸ Paused: ${currentSong}`);
+        }
     } else {
         console.log("▶ Playing: Nothing");
     }
 
     console.log("\n↑ ↓  Navigate");
     console.log("Enter  Play");
+    console.log("Space  Pause / Resume");
     console.log("Q  Quit");
 }
 
@@ -54,8 +63,10 @@ function displayUI() {
 function stopCurrentSong() {
     if (player) {
         player.kill();
+
         player = null;
         currentSong = null;
+        playbackState = null;
     }
 }
 
@@ -71,21 +82,62 @@ function playSelectedSong() {
     // Stop whatever is currently playing
     stopCurrentSong();
 
-    // Start the new song
-    player = spawn("afplay", [songPath]);
+    // Start afplay
+    const newPlayer = spawn("afplay", [songPath]);
 
-    // Update currently playing song
+    // Store process reference
+    player = newPlayer;
+
+    // Update state
     currentSong = song;
+    playbackState = "playing";
 
     displayUI();
 
     // afplay has finished
-    player.on("close", () => {
-        player = null;
-        currentSong = null;
+    newPlayer.on("close", () => {
+
+        // Only clear state if this is still the current player
+        if (player === newPlayer) {
+            player = null;
+            currentSong = null;
+            playbackState = null;
+
+            displayUI();
+        }
+    });
+}
+
+
+// -------------------------
+// Pause / Resume
+// -------------------------
+function togglePauseResume() {
+
+    // Nothing is playing
+    if (!player || !currentSong) {
+        return;
+    }
+
+    // Currently playing → Pause
+    if (playbackState === "playing") {
+
+        player.kill("SIGSTOP");
+
+        playbackState = "paused";
 
         displayUI();
-    });
+    }
+
+    // Currently paused → Resume
+    else if (playbackState === "paused") {
+
+        player.kill("SIGCONT");
+
+        playbackState = "playing";
+
+        displayUI();
+    }
 }
 
 
@@ -117,6 +169,11 @@ function handleInput(key) {
     // Enter
     else if (key === "\r") {
         playSelectedSong();
+    }
+
+    // Space
+    else if (key === " ") {
+        togglePauseResume();
     }
 
     // Q
