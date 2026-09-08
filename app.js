@@ -16,6 +16,7 @@ const mp3Files = files.filter((file) =>
     file.toLowerCase().endsWith(".mp3")
 );
 
+
 // -------------------------
 // Application state
 // -------------------------
@@ -33,12 +34,19 @@ let playbackState = null;
 
 let currentDuration = null;
 
+// Current position of song in seconds
+let currentPosition = 0;
+
+// Timer used for updating progress
+let progressTimer = null;
+
 
 // -------------------------
 // Format seconds as MM:SS
 // -------------------------
 
 function formatDuration(seconds) {
+
     const minutes = Math.floor(seconds / 60);
 
     const remainingSeconds = Math.floor(seconds % 60);
@@ -54,9 +62,92 @@ function formatDuration(seconds) {
 // -------------------------
 
 async function getSongDuration(songPath) {
+
     const metadata = await parseFile(songPath);
 
     return metadata.format.duration;
+}
+
+
+// -------------------------
+// Calculate progress percentage
+// -------------------------
+
+function getProgressPercentage() {
+
+    if (!currentDuration || currentDuration <= 0) {
+        return 0;
+    }
+
+    return (currentPosition / currentDuration) * 100;
+}
+
+
+// -------------------------
+// Create progress bar
+// -------------------------
+
+function getProgressBar() {
+
+    const barLength = 20;
+
+    const percentage = getProgressPercentage();
+
+    const filledLength = Math.round(
+        (percentage / 100) * barLength
+    );
+
+    const emptyLength = barLength - filledLength;
+
+    return "█".repeat(filledLength) +
+        "░".repeat(emptyLength);
+}
+
+
+// -------------------------
+// Start progress timer
+// -------------------------
+
+function startProgressTimer() {
+
+    // Make sure an old timer doesn't exist
+    clearProgressTimer();
+
+    progressTimer = setInterval(() => {
+
+        // Only update while actually playing
+        if (playbackState !== "playing") {
+            return;
+        }
+
+        currentPosition++;
+
+        // Don't go beyond the song duration
+        if (
+            currentDuration !== null &&
+            currentPosition >= currentDuration
+        ) {
+            currentPosition = currentDuration;
+        }
+
+        displayUI();
+
+    }, 1000);
+}
+
+
+// -------------------------
+// Clear progress timer
+// -------------------------
+
+function clearProgressTimer() {
+
+    if (progressTimer) {
+
+        clearInterval(progressTimer);
+
+        progressTimer = null;
+    }
 }
 
 
@@ -96,9 +187,19 @@ function displayUI() {
             console.log(`⏸ Paused: ${currentSong}`);
         }
 
+        // Display duration and progress
         if (currentDuration !== null) {
+
+            const percentage = getProgressPercentage();
+
             console.log(
-                `⏱ Duration: ${formatDuration(currentDuration)}`
+                `⏱ ${formatDuration(currentPosition)} / ${formatDuration(
+                    currentDuration
+                )}`
+            );
+
+            console.log(
+                `${getProgressBar()} ${percentage.toFixed(0)}%`
             );
         }
     }
@@ -120,6 +221,10 @@ function displayUI() {
 
 function stopCurrentSong() {
 
+    // IMPORTANT:
+    // Stop the progress timer
+    clearProgressTimer();
+
     if (player) {
 
         player.kill();
@@ -132,6 +237,8 @@ function stopCurrentSong() {
     playbackState = null;
 
     currentDuration = null;
+
+    currentPosition = 0;
 }
 
 
@@ -166,15 +273,27 @@ async function playSelectedSong() {
 
         currentDuration = duration;
 
+        // Start from beginning
+        currentPosition = 0;
+
         // Draw UI
         displayUI();
 
+        // Start progress timer
+        startProgressTimer();
 
+
+        // -------------------------
         // When song finishes
+        // -------------------------
+
         newPlayer.on("close", () => {
 
             // Make sure this is still the active player
             if (player === newPlayer) {
+
+                // Stop progress timer
+                clearProgressTimer();
 
                 player = null;
 
@@ -183,16 +302,24 @@ async function playSelectedSong() {
                 playbackState = null;
 
                 currentDuration = null;
+
+                currentPosition = 0;
 
                 displayUI();
             }
         });
 
 
+        // -------------------------
         // Handle player error
+        // -------------------------
+
         newPlayer.on("error", (error) => {
 
             if (player === newPlayer) {
+
+                // Stop progress timer
+                clearProgressTimer();
 
                 player = null;
 
@@ -201,6 +328,8 @@ async function playSelectedSong() {
                 playbackState = null;
 
                 currentDuration = null;
+
+                currentPosition = 0;
             }
 
             displayUI();
@@ -233,23 +362,35 @@ function togglePauseResume() {
     }
 
 
+    // -------------------------
     // Playing → Pause
+    // -------------------------
+
     if (playbackState === "playing") {
 
         player.kill("SIGSTOP");
 
         playbackState = "paused";
 
+        // Stop progress timer
+        clearProgressTimer();
+
         displayUI();
     }
 
 
+    // -------------------------
     // Paused → Resume
+    // -------------------------
+
     else if (playbackState === "paused") {
 
         player.kill("SIGCONT");
 
         playbackState = "playing";
+
+        // Resume progress timer
+        startProgressTimer();
 
         displayUI();
     }
@@ -319,7 +460,7 @@ function handleInput(key) {
 
     else if (key.toLowerCase() === "q") {
 
-        // Stop music
+        // Stop music + progress timer
         stopCurrentSong();
 
         // Restore terminal
