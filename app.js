@@ -1,38 +1,83 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const { parseFile } = require("music-metadata");
 
-// Read songs from the songs folder
-const files = fs.readdirSync("./songs");
+// -------------------------
+// Read songs from songs folder
+// -------------------------
+
+const songsFolder = path.join(__dirname, "songs");
+
+const files = fs.readdirSync(songsFolder);
 
 // Keep only MP3 files
-const mp3Files = files.filter((file) => file.endsWith(".mp3"));
+const mp3Files = files.filter((file) =>
+    file.toLowerCase().endsWith(".mp3")
+);
 
-// Currently selected song
+// -------------------------
+// Application state
+// -------------------------
+
 let selectedIndex = 0;
 
-// Currently playing song
 let currentSong = null;
 
-// Reference to the currently running afplay process
 let player = null;
 
-// Current playback state
-// Possible values: "playing", "paused", null
 let playbackState = null;
+// "playing"
+// "paused"
+// null
+
+let currentDuration = null;
+
+
+// -------------------------
+// Format seconds as MM:SS
+// -------------------------
+
+function formatDuration(seconds) {
+    const minutes = Math.floor(seconds / 60);
+
+    const remainingSeconds = Math.floor(seconds % 60);
+
+    return `${String(minutes).padStart(2, "0")}:${String(
+        remainingSeconds
+    ).padStart(2, "0")}`;
+}
+
+
+// -------------------------
+// Get song duration
+// -------------------------
+
+async function getSongDuration(songPath) {
+    const metadata = await parseFile(songPath);
+
+    return metadata.format.duration;
+}
 
 
 // -------------------------
 // Draw UI
 // -------------------------
+
 function displayUI() {
-    // Clear screen and move cursor to top-left
-    process.stdout.write("\x1b[2J\x1b[H");
+
+    // Move cursor to top-left
+    process.stdout.write("\x1b[H");
+
+    // Clear everything below the cursor
+    process.stdout.write("\x1b[J");
 
     console.log("🎵 AUDIO CLI");
     console.log("────────────\n");
 
+    // Display songs
     mp3Files.forEach((song, index) => {
+
         const pointer = index === selectedIndex ? ">" : " ";
 
         console.log(`${pointer} ${index + 1}. ${song}`);
@@ -40,13 +85,25 @@ function displayUI() {
 
     console.log("\n────────────");
 
+    // Display current song
     if (currentSong) {
+
         if (playbackState === "playing") {
             console.log(`▶ Playing: ${currentSong}`);
-        } else if (playbackState === "paused") {
+        }
+
+        else if (playbackState === "paused") {
             console.log(`⏸ Paused: ${currentSong}`);
         }
-    } else {
+
+        if (currentDuration !== null) {
+            console.log(
+                `⏱ Duration: ${formatDuration(currentDuration)}`
+            );
+        }
+    }
+
+    else {
         console.log("▶ Playing: Nothing");
     }
 
@@ -60,66 +117,123 @@ function displayUI() {
 // -------------------------
 // Stop current song
 // -------------------------
+
 function stopCurrentSong() {
+
     if (player) {
+
         player.kill();
 
         player = null;
-        currentSong = null;
-        playbackState = null;
     }
+
+    currentSong = null;
+
+    playbackState = null;
+
+    currentDuration = null;
 }
 
 
 // -------------------------
 // Play selected song
 // -------------------------
-function playSelectedSong() {
+
+async function playSelectedSong() {
+
     const song = mp3Files[selectedIndex];
 
-    const songPath = path.join(__dirname, "songs", song);
+    const songPath = path.join(songsFolder, song);
 
-    // Stop whatever is currently playing
+    // Stop previous song
     stopCurrentSong();
 
-    // Start afplay
-    const newPlayer = spawn("afplay", [songPath]);
+    try {
 
-    // Store process reference
-    player = newPlayer;
+        // Read MP3 metadata
+        const duration = await getSongDuration(songPath);
 
-    // Update state
-    currentSong = song;
-    playbackState = "playing";
+        // Start afplay
+        const newPlayer = spawn("afplay", [songPath]);
 
-    displayUI();
+        // Store player reference
+        player = newPlayer;
 
-    // afplay has finished
-    newPlayer.on("close", () => {
+        // Update state
+        currentSong = song;
 
-        // Only clear state if this is still the current player
-        if (player === newPlayer) {
-            player = null;
-            currentSong = null;
-            playbackState = null;
+        playbackState = "playing";
+
+        currentDuration = duration;
+
+        // Draw UI
+        displayUI();
+
+
+        // When song finishes
+        newPlayer.on("close", () => {
+
+            // Make sure this is still the active player
+            if (player === newPlayer) {
+
+                player = null;
+
+                currentSong = null;
+
+                playbackState = null;
+
+                currentDuration = null;
+
+                displayUI();
+            }
+        });
+
+
+        // Handle player error
+        newPlayer.on("error", (error) => {
+
+            if (player === newPlayer) {
+
+                player = null;
+
+                currentSong = null;
+
+                playbackState = null;
+
+                currentDuration = null;
+            }
 
             displayUI();
-        }
-    });
+
+            console.log(`Error playing song: ${error.message}`);
+        });
+
+    }
+
+    catch (error) {
+
+        displayUI();
+
+        console.log("Could not read MP3 metadata.");
+
+        console.log(error.message);
+    }
 }
 
 
 // -------------------------
 // Pause / Resume
 // -------------------------
+
 function togglePauseResume() {
 
-    // Nothing is playing
+    // No song playing
     if (!player || !currentSong) {
         return;
     }
 
-    // Currently playing → Pause
+
+    // Playing → Pause
     if (playbackState === "playing") {
 
         player.kill("SIGSTOP");
@@ -129,7 +243,8 @@ function togglePauseResume() {
         displayUI();
     }
 
-    // Currently paused → Resume
+
+    // Paused → Resume
     else if (playbackState === "paused") {
 
         player.kill("SIGCONT");
@@ -144,52 +259,80 @@ function togglePauseResume() {
 // -------------------------
 // Handle keyboard input
 // -------------------------
+
 function handleInput(key) {
 
-    // Down arrow
+
+    // -------------------------
+    // Down Arrow
+    // -------------------------
+
     if (key === "\u001b[B") {
 
         if (selectedIndex < mp3Files.length - 1) {
+
             selectedIndex++;
         }
 
         displayUI();
     }
 
-    // Up arrow
+
+    // -------------------------
+    // Up Arrow
+    // -------------------------
+
     else if (key === "\u001b[A") {
 
         if (selectedIndex > 0) {
+
             selectedIndex--;
         }
 
         displayUI();
     }
 
+
+    // -------------------------
     // Enter
+    // -------------------------
+
     else if (key === "\r") {
+
         playSelectedSong();
     }
 
+
+    // -------------------------
     // Space
+    // -------------------------
+
     else if (key === " ") {
+
         togglePauseResume();
     }
 
-    // Q
+
+    // -------------------------
+    // Q / q
+    // -------------------------
+
     else if (key.toLowerCase() === "q") {
 
-        // Stop music before exiting
+        // Stop music
         stopCurrentSong();
 
-        // Restore normal terminal input mode
+        // Restore terminal
         process.stdin.setRawMode(false);
+
         process.stdin.pause();
 
         // Clear terminal
         process.stdout.write("\x1b[2J\x1b[H");
 
         console.log("Goodbye! 👋");
+
+        process.exit(0);
     }
 }
 
@@ -198,11 +341,26 @@ function handleInput(key) {
 // Start application
 // -------------------------
 
-displayUI();
+if (mp3Files.length === 0) {
 
+    console.log("No MP3 files found in the songs folder.");
+
+    process.exit(0);
+}
+
+
+// Enable raw keyboard input
 process.stdin.setRawMode(true);
+
 process.stdin.resume();
 
+
+// Display UI
+displayUI();
+
+
+// Listen for keyboard input
 process.stdin.on("data", (key) => {
+
     handleInput(key.toString());
 });
