@@ -21,22 +21,23 @@ const mp3Files = files.filter((file) =>
 // Application state
 // -------------------------
 
-// Currently selected song in the UI
+// Currently selected song in UI
 let selectedIndex = 0;
 
-// Index of the song that is actually playing
+// Index of the song actually playing
 let currentSongIndex = null;
 
 // Currently playing song
 let currentSong = null;
 
-// Reference to the currently running afplay process
+// Reference to currently running afplay process
 let player = null;
 
-let playbackState = null;
+// Playback state
 // "playing"
 // "paused"
 // null
+let playbackState = null;
 
 // Total duration of current song
 let currentDuration = null;
@@ -44,8 +45,17 @@ let currentDuration = null;
 // Current position of current song
 let currentPosition = 0;
 
-// Timer used for updating progress
+// Progress timer
 let progressTimer = null;
+
+// Shuffle mode
+let shuffle = false;
+
+// Repeat mode
+// "off"
+// "one"
+// "all"
+let repeatMode = "off";
 
 
 // -------------------------
@@ -117,19 +127,17 @@ function getProgressBar() {
 
 function startProgressTimer() {
 
-    // Make sure an old timer doesn't exist
+    // Prevent multiple timers
     clearProgressTimer();
 
     progressTimer = setInterval(() => {
 
-        // Only update while playing
         if (playbackState !== "playing") {
             return;
         }
 
         currentPosition++;
 
-        // Don't go beyond duration
         if (
             currentDuration !== null &&
             currentPosition >= currentDuration
@@ -159,6 +167,101 @@ function clearProgressTimer() {
 
 
 // -------------------------
+// Get random song index
+// -------------------------
+
+function getRandomSongIndex() {
+
+    // Only one song
+    if (mp3Files.length <= 1) {
+        return currentSongIndex;
+    }
+
+    let randomIndex;
+
+    do {
+
+        randomIndex = Math.floor(
+            Math.random() * mp3Files.length
+        );
+
+    } while (randomIndex === currentSongIndex);
+
+    return randomIndex;
+}
+
+
+// -------------------------
+// Get next song index
+// -------------------------
+
+function getNextSongIndex() {
+
+    // Shuffle ON
+    if (shuffle) {
+
+        return getRandomSongIndex();
+    }
+
+
+    // Normal sequential playback
+    const nextIndex = currentSongIndex + 1;
+
+    // There is a next song
+    if (nextIndex < mp3Files.length) {
+
+        return nextIndex;
+    }
+
+
+    // At last song + Repeat All
+    if (repeatMode === "all") {
+
+        return 0;
+    }
+
+
+    // At last song + Repeat Off
+    return null;
+}
+
+
+// -------------------------
+// Get previous song index
+// -------------------------
+
+function getPreviousSongIndex() {
+
+    // Shuffle ON
+    if (shuffle) {
+
+        return getRandomSongIndex();
+    }
+
+
+    // Normal previous song
+    const previousIndex = currentSongIndex - 1;
+
+    // There is a previous song
+    if (previousIndex >= 0) {
+
+        return previousIndex;
+    }
+
+
+    // At first song + Repeat All
+    if (repeatMode === "all") {
+
+        return mp3Files.length - 1;
+    }
+
+
+    // At first song + Repeat Off
+    return null;
+}
+
+
+// -------------------------
 // Draw UI
 // -------------------------
 
@@ -183,7 +286,7 @@ function displayUI() {
 
     console.log("\n────────────");
 
-    // Display current song
+    // Current song
     if (currentSong) {
 
         if (playbackState === "playing") {
@@ -194,7 +297,8 @@ function displayUI() {
             console.log(`⏸ Paused: ${currentSong}`);
         }
 
-        // Display duration and progress
+
+        // Duration + progress
         if (currentDuration !== null) {
 
             const percentage = getProgressPercentage();
@@ -215,10 +319,35 @@ function displayUI() {
         console.log("▶ Playing: Nothing");
     }
 
-    console.log("\n↑ ↓  Navigate");
+
+    // Modes
+    console.log("\n────────────");
+
+    console.log(
+        `🔀 Shuffle: ${shuffle ? "ON" : "OFF"}`
+    );
+
+    if (repeatMode === "off") {
+
+        console.log("🔁 Repeat: Off");
+
+    } else if (repeatMode === "one") {
+
+        console.log("🔂 Repeat: One");
+
+    } else if (repeatMode === "all") {
+
+        console.log("🔁 Repeat: All");
+    }
+
+
+    // Controls
+    console.log("\n↑ ↓  Select");
     console.log("← →  Previous / Next");
     console.log("Enter  Play");
     console.log("Space  Pause / Resume");
+    console.log("S  Shuffle ON/OFF");
+    console.log("R  Change Repeat");
     console.log("Q  Quit");
 }
 
@@ -235,10 +364,10 @@ function stopCurrentSong() {
     if (player) {
 
         // IMPORTANT:
-        // Remove reference BEFORE killing process.
+        // Remove reference before killing process.
         //
-        // This makes sure the old player's
-        // "close" event does not trigger auto-next.
+        // This prevents the old player's close event
+        // from triggering automatic next.
         const oldPlayer = player;
 
         player = null;
@@ -264,7 +393,7 @@ function stopCurrentSong() {
 
 async function playSongAtIndex(index) {
 
-    // Check index boundaries
+    // Invalid index
     if (index < 0 || index >= mp3Files.length) {
         return;
     }
@@ -273,19 +402,24 @@ async function playSongAtIndex(index) {
 
     const songPath = path.join(songsFolder, song);
 
+
     // Stop previous song
     stopCurrentSong();
+
 
     try {
 
         // Read MP3 metadata
         const duration = await getSongDuration(songPath);
 
+
         // Start afplay
         const newPlayer = spawn("afplay", [songPath]);
 
+
         // Store player reference
         player = newPlayer;
+
 
         // Update state
         selectedIndex = index;
@@ -300,8 +434,10 @@ async function playSongAtIndex(index) {
 
         currentPosition = 0;
 
+
         // Draw UI
         displayUI();
+
 
         // Start progress timer
         startProgressTimer();
@@ -313,14 +449,58 @@ async function playSongAtIndex(index) {
 
         newPlayer.on("close", () => {
 
-            // Make sure this is still the active player
+            // Make sure this is still
+            // the active player
             if (player === newPlayer) {
 
                 clearProgressTimer();
 
                 player = null;
 
+
+                // Save current index before
+                // clearing the state
+                const finishedIndex = currentSongIndex;
+
+
+                // -------------------------
+                // Repeat One
+                // -------------------------
+
+                if (repeatMode === "one") {
+
+                    playSongAtIndex(finishedIndex);
+
+                    return;
+                }
+
+
+                // -------------------------
+                // Get next song
+                // -------------------------
+
+                const nextIndex = getNextSongIndex();
+
+
+                // -------------------------
+                // Next song exists
+                // -------------------------
+
+                if (nextIndex !== null) {
+
+                    playSongAtIndex(nextIndex);
+
+                    return;
+                }
+
+
+                // -------------------------
+                // Playlist finished
+                // -------------------------
+
                 currentSong = null;
+
+                currentSongIndex = null;
 
                 playbackState = null;
 
@@ -328,26 +508,7 @@ async function playSongAtIndex(index) {
 
                 currentPosition = 0;
 
-
-                // -------------------------
-                // Automatically play next
-                // -------------------------
-
-                const nextIndex = currentSongIndex + 1;
-
-                if (nextIndex < mp3Files.length) {
-
-                    playSongAtIndex(nextIndex);
-
-                }
-
-                else {
-
-                    // We are already at the last song
-                    currentSongIndex = null;
-
-                    displayUI();
-                }
+                displayUI();
             }
         });
 
@@ -411,30 +572,28 @@ function playSelectedSong() {
 
 function playNextSong() {
 
-    // If a song is currently playing,
-    // move relative to the CURRENTLY PLAYING song.
-    if (currentSongIndex !== null) {
+    // Nothing currently playing
+    if (currentSongIndex === null) {
 
-        const nextIndex = currentSongIndex + 1;
+        const nextIndex = selectedIndex + 1;
 
-        // Already at last song
-        if (nextIndex >= mp3Files.length) {
-            return;
+        if (nextIndex < mp3Files.length) {
+
+            playSongAtIndex(nextIndex);
         }
 
-        playSongAtIndex(nextIndex);
-
         return;
     }
 
 
-    // Nothing playing:
-    // move relative to selected song
-    const nextIndex = selectedIndex + 1;
+    const nextIndex = getNextSongIndex();
 
-    if (nextIndex >= mp3Files.length) {
+
+    // No next song
+    if (nextIndex === null) {
         return;
     }
+
 
     playSongAtIndex(nextIndex);
 }
@@ -446,30 +605,28 @@ function playNextSong() {
 
 function playPreviousSong() {
 
-    // If a song is currently playing,
-    // move relative to the CURRENTLY PLAYING song.
-    if (currentSongIndex !== null) {
+    // Nothing currently playing
+    if (currentSongIndex === null) {
 
-        const previousIndex = currentSongIndex - 1;
+        const previousIndex = selectedIndex - 1;
 
-        // Already at first song
-        if (previousIndex < 0) {
-            return;
+        if (previousIndex >= 0) {
+
+            playSongAtIndex(previousIndex);
         }
 
-        playSongAtIndex(previousIndex);
-
         return;
     }
 
 
-    // Nothing playing:
-    // move relative to selected song
-    const previousIndex = selectedIndex - 1;
+    const previousIndex = getPreviousSongIndex();
 
-    if (previousIndex < 0) {
+
+    // No previous song
+    if (previousIndex === null) {
         return;
     }
+
 
     playSongAtIndex(previousIndex);
 }
@@ -481,44 +638,73 @@ function playPreviousSong() {
 
 function togglePauseResume() {
 
-    // No song playing
+    // Nothing playing
     if (!player || !currentSong) {
         return;
     }
 
 
-    // -------------------------
     // Playing → Pause
-    // -------------------------
-
     if (playbackState === "playing") {
 
         player.kill("SIGSTOP");
 
         playbackState = "paused";
 
-        // Stop progress timer
         clearProgressTimer();
 
         displayUI();
     }
 
 
-    // -------------------------
     // Paused → Resume
-    // -------------------------
-
     else if (playbackState === "paused") {
 
         player.kill("SIGCONT");
 
         playbackState = "playing";
 
-        // Resume progress timer
         startProgressTimer();
 
         displayUI();
     }
+}
+
+
+// -------------------------
+// Toggle shuffle
+// -------------------------
+
+function toggleShuffle() {
+
+    shuffle = !shuffle;
+
+    displayUI();
+}
+
+
+// -------------------------
+// Change repeat mode
+// -------------------------
+
+function changeRepeatMode() {
+
+    if (repeatMode === "off") {
+
+        repeatMode = "one";
+    }
+
+    else if (repeatMode === "one") {
+
+        repeatMode = "all";
+    }
+
+    else {
+
+        repeatMode = "off";
+    }
+
+    displayUI();
 }
 
 
@@ -600,12 +786,32 @@ function handleInput(key) {
 
 
     // -------------------------
+    // S → Shuffle
+    // -------------------------
+
+    else if (key.toLowerCase() === "s") {
+
+        toggleShuffle();
+    }
+
+
+    // -------------------------
+    // R → Repeat
+    // -------------------------
+
+    else if (key.toLowerCase() === "r") {
+
+        changeRepeatMode();
+    }
+
+
+    // -------------------------
     // Q / q
     // -------------------------
 
     else if (key.toLowerCase() === "q") {
 
-        // Stop music + progress timer
+        // Stop music + timer
         stopCurrentSong();
 
         // Restore terminal
